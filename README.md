@@ -1,0 +1,2 @@
+# DIKTAAT
+performance trigger sequencer
