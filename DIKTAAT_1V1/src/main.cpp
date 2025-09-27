@@ -157,7 +157,7 @@ bool lastClockState = 0;
 uint8_t bar = 1;
 uint8_t step = 0;     //counts clock ticks
 uint8_t length = 64;  //clock ticks needed to play whole sequence
-bool lengthChanged = false;
+uint8_t settingToFlash = 0b00000000;
 const uint8_t maxLength = 128;
 uint8_t stepsPerLED = (length / 2) / 8;
 bool newStep = LOW;
@@ -168,7 +168,7 @@ bool pause = false;
 uint8_t clockOutCounter = 1;
 uint8_t clockInCounter = 1;
 bool progressClock = false;
-unsigned long estimatedTempo = 0;
+unsigned long estimatedTempo[2] = {0, 0};
 unsigned long prevClockTime = 0;
 bool estimateClock = false;
 bool extClockPresent;
@@ -254,6 +254,7 @@ const unsigned long minTempo[2] = {90000, 150000}; // second value corresponds t
 unsigned long clockOutStarted = 0;
 bool clockOutOn = true;
 unsigned long tapStarted;
+int swingAmount = 1024/2;
 
 //Tap Tempo
 unsigned long prevTap;
@@ -274,6 +275,7 @@ uint8_t jumpTo = 0; // set seQstep to jumpTo
 uint8_t jumpBy = 0; 
 const uint8_t breakLengths[6] = {1, 2, 3, 4, 8, 16}; 
 uint8_t breakLength = breakLengths[0];
+uint8_t breakFreeze = 0b00000000;
 
 unsigned long breakStarted = 0;
 bool breakOn = false;
@@ -301,7 +303,7 @@ uint8_t seqBuffer[maxLength/2];
 
 // Probability mode
 int probability = 1023 / 2;
-const int probDeadzone = 1023 / 6; // width of deadzone in middle of probability fader
+const int faderDeadzone = 1023 / 6; // width of deadzone in middle of fader
 // 
 uint8_t probCap = 30; // % chance for change to happen, more if hasNeighbour
 uint8_t neighbourParam = 2; // number of times having a neighbour increases change chance
@@ -310,17 +312,22 @@ uint8_t nextSeqStep = 0;
 uint8_t prevSeqStep = 0;
 bool hasNeighbour[4];
 int diceRoll = 0;
-bool justEnteredProbability = true;
+// bool justEnteredProbability = true;
+
+uint8_t microtimingProbability = 0b01010101; // 2 bits per channel set it's behavious, left bit for microtiming, right bit for probability
+uint8_t microtimingProbabilityChanged = 0b00000000;
+
 
 // X-Fade mode
 uint8_t xFadePtrns[2];
-bool justEnteredXFade = false;
+// bool justEnteredXFade = false;
 uint8_t xFadeStep = 0;
 
 // Copy-Pasting
 bool copying = false;
 bool pasting = false;
-bool toCopy[16] = { false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false };
+// bool toCopy[16] = { false, false, false, false, false, false, false, false, false, false, false, false, false, false, false, false };
+uint16_t toCopy = 0;
 uint8_t copyPtrn = 0;
 uint8_t copyTrack = 0;
 
@@ -329,7 +336,7 @@ uint8_t activePtrn = 1;
 uint8_t prevPtrn = activePtrn;
 
 // Pattern chaining
-bool justEnteredChain = true;
+// bool justEnteredChain = true;
 uint8_t chainLength = 1;
 uint8_t chainStep = 0;
 uint8_t patternChain[8] = {1, 1, 1, 1, 1, 1, 1, 1};
@@ -343,7 +350,7 @@ bool firstChainFilled = false;
 uint8_t activeBank = 0;
 
 unsigned long flashTimer = 0;
-const unsigned long flashLength = 100000;
+unsigned long flashLength = 100000;
 unsigned long flashStarted = 0;
 const unsigned long flashFor = 1000000;
 const unsigned long clockFlashLength = 10000;
@@ -378,13 +385,21 @@ bool readFader;
 
 //Triggers and Timing
 unsigned long currentTime = 0;
+unsigned long timePassed = 0;
 
-const unsigned int triggerLength = 5000;  //in micros
+unsigned int triggerLength = 5000;  //in micros
 unsigned long trigStarted[4] = { 0, 0, 0, 0 };
 bool trigON[4] = { false, false, false, false };
 
 bool trigLights = true;
 const unsigned long trigLEDlength = 50000;  //in micros
+
+//Delay triggers
+unsigned long trigDelays[4] = {0, 0, 0, 0};
+unsigned long trigDelayTimer[4] = {0, 0, 0, 0};
+uint8_t trigRepeatsToDo[4] = {0, 0, 0, 0};
+unsigned long timePerStep;
+unsigned long previousStepTime;
 
 // Trigger button double tapping
 const unsigned long doubleTap = 250000; // tolerance for double tap in micros
@@ -405,6 +420,11 @@ bool RECmode = false;
 uint8_t activeSubmode = 0;
 bool prevRECmode = false;
 uint8_t prevSubmode = 0;
+bool modeChanged = true;
+
+// Options
+unsigned long prevOptionsTap;
+bool swingFader = false;
 
 //Alt Modes - change the behaviour of various submodes
 bool altModes[5][2];
@@ -412,8 +432,9 @@ bool altModes[5][2];
 // Alternative Play modes on/off ([0][0]-BREAK, [1][0]-SHRED, [2][0]-PROB, [3][0]-X-FADE, [4][0]-Default PLAY Tool)
 
 // Boot Options - Customize the behaviour of the module
-bool bootOptions[4];
-// [0] - unused, [1] - Delayed Clock Out after Reset, [2] - Tool reset on REC/PLAY change, [3] - Instant/Sequential Pattern and Bank switching
+uint8_t bootOptions = 0b00010000;
+// Bit 0 - Disable the Break triggers on the Reset Out output when using the ALT mode of the Break Tool, Bit 1 - Delayed Clock Out after Reset, Bit 2 - Tool reset on REC/PLAY change, Bit 3 - Instant/Sequential Pattern and Bank switching
+// bits 4-5 - Trigger length (00/01/10/11 - 1000/5000/10000/20000 micros)
 
 //Assign function
 uint8_t assignSubmode[2] = { 0 , 1}; //{ REC mode (yes or no), submode index (1-4)}
@@ -439,7 +460,7 @@ void ptrnUpdate();
 void submodeUpdate();
 void playSeq();
 void trigRecord();
-void trig(int channel, bool ignoreMute = false);
+void trig(int channel, bool ignoreMute = false, unsigned long trigDelay = 0, uint8_t trigRepeats = 1);
 void trigClockOut();
 void trigReset();
 void trigBreak();
@@ -456,6 +477,7 @@ void mux();
 void handleClockIn();
 void handleClockOut();
 void handleDelayedClock();
+void handleDelayedTrigs();
 void handleHeldReset();
 void handleModes();
 void checkDoubleTap();
@@ -517,9 +539,25 @@ void setup() {
         bootMenu();
       }
     }
+
+    uint8_t triggerLengthToDecode = bootOptions & 0b00110000;
+        switch (triggerLengthToDecode) {
+          case 0b00000000:
+            triggerLength = 1000;
+            break;
+          case 0b00010000:
+            triggerLength = 5000;
+            break;
+          case 0b00100000:
+            triggerLength = 10000;
+            break;
+          case 0b00110000:
+            triggerLength = 20000;
+            break;
+        }
 }
 
-void loop() {  
+void loop() {
   mux();
   handleClockIn();
   handleHeldReset();
@@ -532,14 +570,17 @@ void loop() {
   }
 
   // Record current time
-  currentTime = micros();
+  timePassed = micros() - currentTime;
+  currentTime += timePassed;
   checkDoubleTap();
   takeDownOuts();
-  refreshStates();
+  // refreshStates();
 
   if (delayingClock) {
     handleDelayedClock();
   }
+
+  handleDelayedTrigs();
 
   // Finished new step operations
   newStep = LOW;
@@ -620,7 +661,7 @@ if (altModes[4][0]){
   }
   }
 
-  liveTrigger();
+  // liveTrigger();
   stripStepMeter();
   ptrnUpdate();
   ptrnLEDsUpdate();
@@ -629,7 +670,8 @@ if (altModes[4][0]){
 void liveTrigger() {
       for (int i = 0; i <= 3; i++) {
       if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] && !prevButtons[buttonTrigstep[i]][buttonTriggroup[i]]) { 
-        trig(i+1, true); 
+        trig(i+1, true);
+        // trig(i + 1, true, 1000000/5,3);
         }
       }
 }
@@ -667,7 +709,7 @@ void resetNow() {
 void ptrnUpdate() {
 for (int i = 0; i <= 3; i++) {
       if (buttons[buttonPatternStep[i]][buttonPatternGroup[i]] && !prevButtons[buttonPatternStep[i]][buttonPatternGroup[i]]) {
-          if (!bootOptions[3]) {
+          if (!(bootOptions & (1 << 3))) {
             activePtrn = i + 1;
           } 
         chainLength = 1;
@@ -693,8 +735,38 @@ void submodeUpdate() {
 }
 
 void playSeq() {
+
+  if (!RECmode && activeSubmode == 1) { // Handle break mode
+    if (newStep && !(step & 1) && (breakFreeze || buttons[buttonTrig1step][buttonTrig1group] || buttons[buttonTrig2step][buttonTrig2group] || buttons[buttonTrig3step][buttonTrig3group] || buttons[buttonTrig4step][buttonTrig4group])) {
+      if (jumpBy < (breakLength-1)){
+        jumpBy = jumpBy + 1;
+      }
+      else{
+        jumpBy = 0;
+        breakOnNextStep = true;
+        
+        if (fillOrder[fillOrderStep] && (fillOrderStep < 4)) {  // if the element is not zero
+              fillOrderStep++;
+            }
+            else {
+              fillOrderStep = 1;
+            }
+      }
+  
+      if (fillOrder[fillOrderStep-1]) {jumpTo = (1+(length/8)*(fillOrder[fillOrderStep-1] - 1)) + jumpBy;}
+      if (jumpTo > (length / 2)) {jumpTo = jumpTo - (length / 2);} // return to start of sequence if trying to jump beyond sequence length
+  
+    }
+    else if (newStep && !(step & 1)) {
+      jumpTo = 0; jumpBy = 0; fillOrderStep = 1; 
+    }
+  }
+
   if (step & 1) {  // play the sequence on even steps
     
+    flashLength = timePerStep/2; // adjust rate of flashing to avoid aliasing
+    if (flashLength < 100000) {flashLength = 100000;}
+
     if (jumpTo) {seqStep = jumpTo - 1;}
     else{seqStep = step / 2;}
 
@@ -704,7 +776,7 @@ void playSeq() {
 
     // Take XFade into account
     if (!RECmode && (activeSubmode == 4) && xFadePtrns[1]) {
-      if (length > 32) {
+      if (length > 32) { // this way long patterns x-fade twice over their length
         if (altModes[3][0] && (chainLength > 1)) {
           activeBank = xFadePtrns[(xFadeStep) <= (seqStep & 31)] - 1;
         }
@@ -730,29 +802,29 @@ void playSeq() {
 
     for (int i = 0; i <= 3; i ++) { // take probability into account
       hasNeighbour[i] = prevSeq[i] || nextSeq[i];
-      if (probabilityActive[i] && !RECmode && !(jumpTo)) { // apply when not in REC mode or in break mode
+      if (probabilityActive[i] && !RECmode && !(jumpTo) && (microtimingProbability & (0b01 << (2*i)))) { // apply when not in REC mode or in break mode
 
-        if (probability < ((1023 / 2) - (probDeadzone / 2)))
+        if (probability < ((1023 / 2) - (faderDeadzone / 2))) // Fader left
         {
         
           if (!altModes[2][0]) {
-            diceRoll = random(-2*((1023 / 2) - (probDeadzone / 2)), ((1023 / 2) - (probDeadzone / 2))); // limits the max occurrence to about 33.3% 
+            diceRoll = random(-2*((1023 / 2) - (faderDeadzone / 2)), ((1023 / 2) - (faderDeadzone / 2))); // limits the max occurrence to about 33.3% 
           }
           else {
-            diceRoll = random(0, ((1023 / 2) - (probDeadzone / 2)));
+            diceRoll = random(0, ((1023 / 2) - (faderDeadzone / 2)));
           }
 
           if (probability <= diceRoll) {
             fromSeq[i] = false;
           }
         }
-        else if (probability > ((1023 / 2) + (probDeadzone / 2)))
+        else if (probability > ((1023 / 2) + (faderDeadzone / 2))) // Fader right
         {
           if (!altModes[2][0]) {
-            diceRoll = random(((1023 / 2) + (probDeadzone / 2)), 1024 + 2*(1023 - ((1023 / 2) + (probDeadzone / 2)))); // limits the max occurrence to about 33.3%  
+            diceRoll = random(((1023 / 2) + (faderDeadzone / 2)), 1024 + 2*(1023 - ((1023 / 2) + (faderDeadzone / 2)))); // limits the max occurrence to about 33.3%  
           }
           else {
-            diceRoll = random(((1023 / 2) + (probDeadzone / 2)), 1024);
+            diceRoll = random(((1023 / 2) + (faderDeadzone / 2)), 1024);
           }
           if ((hasNeighbour[i] || fromSeq[i]) && (probability >= diceRoll)) {
             fromSeq[i] = !fromSeq[i];
@@ -764,10 +836,42 @@ void playSeq() {
     
     for (int i = 0; i <= 3; i++) {
       if (fromSeq[i]) {
-        trig(i+1);
+        unsigned long delayTrigBy = 0;
+        uint8_t trigRepeats = 1;
+
+        if (probabilityActive[i] && !RECmode && !(jumpTo) && (microtimingProbability & (0b10 << (2*i)))) { // apply when not in REC mode or in break mode
+
+          if (probability < ((1023 / 2) - (faderDeadzone / 2))) // Fader left - microtiming
+          {
+
+            delayTrigBy = timePerStep/2;
+            delayTrigBy = delayTrigBy * ((1023 / 2) - (faderDeadzone / 2) - probability)/(((1023 / 2) - (faderDeadzone / 2)));
+
+            delayTrigBy = random(0, delayTrigBy);
+
+          }
+          else if (probability > ((1023 / 2) + (faderDeadzone / 2))) // Fader right - ratchetting
+          {
+            int coinToss = random((1023 / 2) + (faderDeadzone / 2), 1023*2);
+            if (probability > coinToss) {
+              trigRepeats = random(1, 4);
+              if (trigRepeats != 1) {
+                delayTrigBy = timePerStep*2/(trigRepeats+1);
+              }
+              else {
+                delayTrigBy = timePerStep/(trigRepeats+1);
+              }
+              trig(i + 1);
+            }
+          }
+        }
+        
+        trig(i+1, false, delayTrigBy, trigRepeats);
       }
     }
-    // trigs(fromSeq);
+    // Estimate time per seq step
+    timePerStep = currentTime - previousStepTime;
+    previousStepTime = currentTime;
 
     if (breakOnNextStep && !resetOnNextStep) {trigBreak(); breakOnNextStep = false;}
     if (resetOnNextStep) {trigReset(); resetOnNextStep = false;}
@@ -799,18 +903,26 @@ void trigRecord() {  // record triggers pressed during current sequencer step in
   ptrnLEDsUpdate();
 }
 
-void trig(int channel, bool ignoreMute)
-{ // send out a trigger from channel = 1/2/3/4
-  trigStarted[channel - 1] = micros();
-  if ((!mute[channel - 1] && !tempMute[channel - 1]) || ignoreMute)
-  {
-    outs[trigOutsStep[channel - 1]][trigOutsGroup[channel - 1]] = true;
-    trigON[channel - 1] = true;
+void trig(int channel, bool ignoreMute, unsigned long trigDelay, uint8_t trigRepeats)
+{
+  if (trigDelay > 0) {
+    trigDelays[channel-1] = trigDelay;
+    trigDelayTimer[channel-1] = trigDelay;
+    trigRepeatsToDo[channel-1] = trigRepeats;
   }
-  if (trigLights)
+  else {
+    // send out a trigger from channel = 1/2/3/4
+    trigStarted[channel - 1] = micros();
+    if ((!mute[channel - 1] && !tempMute[channel - 1]) || ignoreMute)
     {
-      // outs[trigLEDSstep[channel - 1]][trigLEDSgroup[channel - 1]] = HIGH;
-      outs[trigLEDSstep[channel - 1]][trigLEDSgroup[channel - 1]] = !(mute[channel - 1] || tempMute[channel - 1]);
+      outs[trigOutsStep[channel - 1]][trigOutsGroup[channel - 1]] = true;
+      trigON[channel - 1] = true;
+    }
+    if (trigLights)
+      {
+        // outs[trigLEDSstep[channel - 1]][trigLEDSgroup[channel - 1]] = HIGH;
+        outs[trigLEDSstep[channel - 1]][trigLEDSgroup[channel - 1]] = !(mute[channel - 1] || tempMute[channel - 1]);
+    }
   }
 }
 
@@ -830,7 +942,7 @@ void trigReset() {  //send out a trigger from the Reset Output and the Break Out
   resetStarted = micros();
   resetOn = true;
 
-  if (!bootOptions[1]) {
+  if (!(bootOptions & (1 << 1))) {
     delayClock = true;
   }
 
@@ -841,14 +953,15 @@ void trigBreak() {  //send out a trigger from the Break Output
 if (!altModes[0][0]) {
   outs[breakOutstep][breakOutgroup] = HIGH;
   }
-  else if (!bootOptions[0])
+  else if (!(bootOptions & (1 << 0)))
   {
     outs[resetOutstep][resetOutgroup] = HIGH;
   }
   breakStarted = micros();
   breakOn = true;
+  breakLEDon = true;
 
-  if (!bootOptions[1]) {
+  if (!(bootOptions & (1 << 1))) {
     delayClock = true;
   }
 }
@@ -923,12 +1036,121 @@ void clearSeq() {
 
 void copy() {
   ptrnLEDsUpdate();
-  stripStepMeter();
+  // stripStepMeter();
+  clearLEDstrip();
+  outs[faderLEDstep][faderLEDgroup] = HIGH;
+
+  if (modeChanged || prevButtons[buttonOptionsstep][buttonOptionsgroup]) {
+    prevFader = faderValue;
+    readFader = false;
+    // modeChanged = false;
+  }
+
+  if ((abs(prevFader - faderValue) > 5) && (readFader == false)) {
+    readFader = true;
+  }
+
+  int8_t pasteOffset = 0;
+
+  if (readFader){  
+      if (1023 - faderValue < ((1023/2)-(faderDeadzone/2))) {
+        for (int j = 0; j <= 3; j++)
+        {
+          if (1023 - faderValue <= ((j + 1) * (1023 / 8))) {
+          outs[stripLEDsstep[j]][stripLEDsgroup[j]] = true;
+          pasteOffset--;
+          }
+        }
+      }
+      else if (1023 - faderValue > ((1023/2)+(faderDeadzone/2))) {
+        for (int j = 4; j <= 7; j++)
+        {
+          if (1023 - faderValue >= (j * (1023 / 8))) {
+            outs[stripLEDsstep[j]][stripLEDsgroup[j]] = true;
+            pasteOffset++;
+          }
+        }
+      }
+  }
+    
   if (!pasting) {
     copying = true;
-    for (int i = 0; i <= 15; i++) {
-      toCopy[i] = false;
-      copyPtrn = 0;
+    // for (int i = 0; i <= 15; i++) {
+    //   toCopy[i] = false;
+    //   copyPtrn = 0;
+    // }
+    toCopy = 0;
+    copyPtrn = 0;
+  }
+  else {
+    if (copyPtrn) {  // When copying from pattern
+      for (int i = 0; i <= 3; i++) {
+
+        if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] > prevButtons[buttonTrigstep[i]][buttonTriggroup[i]])
+        { // Paste Track i from pattern into Track i of active pattern
+          for (int j = 0; j <= (length / 2 - 1); j++)
+          {
+            seqs[j][4 * (activePtrn - 1) + i] = (seqs[j][4 * (activePtrn - 1) + i] & ~(1 << activeBank)) | (seqs[j][4 * (copyPtrn - 1) + i] & (1 << activeBank)); // Replacing triggers
+            //seqs[j][4 * (activePtrn - 1) + i] = seqs[j][4 * (copyPtrn - 1) + i]; // before banks
+          }
+
+         toFlash[i] = true;
+         toFlash[copyPtrn+3] = true;
+        }
+      if (buttons[buttonPatternStep[i]][buttonPatternGroup[i]] > prevButtons[buttonPatternStep[i]][buttonPatternGroup[i]]){ // Pasting pattern into Pattern i
+          for (int j = 0; j <= (length / 2 - 1); j++) {
+            for (int k = 0; k<=3; k++) {
+              seqs[j][k+4*i] = (seqs[j][k+4*i] & ~(1 << activeBank)) | (seqs[j][4*(copyPtrn-1)+k] & (1 << activeBank)); // Replacing triggers  
+            }
+
+          }
+         toFlash[i+4] = true;
+         toFlash[copyPtrn+3] = true;
+      }
+      }
+    } 
+    else {  //When copying a single track
+      int dest = 0;
+      for (int k = 0; k <= 3; k++) {
+        if (buttons[buttonTrigstep[k]][buttonTriggroup[k]] > prevButtons[buttonTrigstep[k]][buttonTriggroup[k]]) { // Paste single track to Track k
+          for (int i = 0; i <= 15; i++) {
+            // if (toCopy[i]) {
+              if (toCopy & (1 << i)) {
+              for (int j = 0; j <= (length / 2 - 1); j++) {
+
+               if (j + pasteOffset > (length / 2 - 1)) {
+                  dest = j + pasteOffset - (length / 2);
+                }
+                else if (j + pasteOffset < 0) {
+                  dest = j + pasteOffset + (length / 2);
+                }
+                else {
+                  dest = j + pasteOffset;
+                }
+
+                
+                seqs[dest][4 * (activePtrn - 1) + k] = (seqs[j][4 * (activePtrn - 1) + k] & ~(1 << activeBank)) | (seqs[j][i] & (1 << activeBank)); // Replacing triggers
+
+              }
+            }
+          }
+        toFlash[k] = true;
+        toFlash[copyTrack-1] = true;
+        }
+      if (buttons[buttonPatternStep[k]][buttonPatternGroup[k]] > prevButtons[buttonPatternStep[k]][buttonPatternGroup[k]]) {  // Paste single track to same track in Pattern i
+        for (int i = 0; i <= 15; i++) {
+          // if (toCopy[i]) {
+            if (toCopy & (1 << i)) {
+            for (int j = 0; j <= (length / 2 - 1); j++) {
+              seqs[j][4*k + copyTrack - 1] = (seqs[j][4*k + copyTrack - 1] & ~(1 << activeBank)) | (seqs[j][i] & (1 << activeBank)); // Replacing triggers
+              // seqs[j][4*k + copyTrack - 1] = seqs[j][i]; // before banks
+            }
+          }
+        }
+        toFlash[k+4] = true;
+        toFlash[copyTrack-1] = true;
+      }
+      }
     }
   }
 
@@ -936,7 +1158,8 @@ void copy() {
     for (int i = 0; i <= 3; i++) {
       if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] > prevButtons[buttonTrigstep[i]][buttonTriggroup[i]])
       { 
-        toCopy[4 * (activePtrn - 1) + i] = true;
+        // toCopy[4 * (activePtrn - 1) + i] = true;
+        toCopy |= (1 << (4 * (activePtrn - 1) + i));
         copying = false;
         pasting = true;
         copyTrack = i + 1;
@@ -958,77 +1181,26 @@ void copy() {
       pasting = false;
       copyTrack = 0;
       copyPtrn = 0;
-      for (int i = 0; i <= 15; i++) {
-        toCopy[i] = false;
-      }
+      // for (int i = 0; i <= 15; i++) {
+      //   toCopy[i] = false;
+      // }
+      toCopy = 0;
     }
   }
 
-  if (pasting) {
-    if (copyPtrn) {  // When copying from pattern
-      for (int i = 0; i <= 3; i++) {
+  bar = seqStep / stepsPerLED;
 
-        if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] > prevButtons[buttonTrigstep[i]][buttonTriggroup[i]])
-        { // Paste Track i from pattern into Track i of active pattern
-          for (int j = 0; j <= (maxLength / 2 - 1); j++)
-          {
-            seqs[j][4 * (activePtrn - 1) + i] = (seqs[j][4 * (activePtrn - 1) + i] & ~(1 << activeBank)) | (seqs[j][4 * (copyPtrn - 1) + i] & (1 << activeBank)); // Replacing triggers
-            //seqs[j][4 * (activePtrn - 1) + i] = seqs[j][4 * (copyPtrn - 1) + i]; // before banks
-          }
-
-         toFlash[i] = true;
-         toFlash[copyPtrn+3] = true;
-        }
-      if (buttons[buttonPatternStep[i]][buttonPatternGroup[i]] > prevButtons[buttonPatternStep[i]][buttonPatternGroup[i]]){ // Pasting pattern into Pattern i
-          for (int j = 0; j <= (maxLength / 2 - 1); j++) {
-            for (int k = 0; k<=3; k++) {
-              seqs[j][k+4*i] = (seqs[j][k+4*i] & ~(1 << activeBank)) | (seqs[j][4*(copyPtrn-1)+k] & (1 << activeBank)); // Replacing triggers  
-            }
-
-          }
-         toFlash[i+4] = true;
-         toFlash[copyPtrn+3] = true;
-      }
-      }
-    } 
-    else {  //When copying a single track
-
-      for (int k = 0; k <= 3; k++) {
-        if (buttons[buttonTrigstep[k]][buttonTriggroup[k]] > prevButtons[buttonTrigstep[k]][buttonTriggroup[k]]) { // Paste single track to Track k
-          for (int i = 0; i <= 15; i++) {
-            if (toCopy[i]) {
-              for (int j = 0; j <= (maxLength / 2 - 1); j++) {
-                seqs[j][4 * (activePtrn - 1) + k] = (seqs[j][4 * (activePtrn - 1) + k] & ~(1 << activeBank)) | (seqs[j][i] & (1 << activeBank)); // Replacing triggers
-
-              }
-            }
-          }
-        toFlash[k] = true;
-        toFlash[copyTrack-1] = true;
-        }
-      if (buttons[buttonPatternStep[k]][buttonPatternGroup[k]] > prevButtons[buttonPatternStep[k]][buttonPatternGroup[k]]) {  // Paste single track to same track in Pattern i
-        for (int i = 0; i <= 15; i++) {
-          if (toCopy[i]) {
-            for (int j = 0; j <= (maxLength / 2 - 1); j++) {
-              seqs[j][4*k + copyTrack - 1] = (seqs[j][4*k + copyTrack - 1] & ~(1 << activeBank)) | (seqs[j][i] & (1 << activeBank)); // Replacing triggers
-              // seqs[j][4*k + copyTrack - 1] = seqs[j][i]; // before banks
-            }
-          }
-        }
-        toFlash[k+4] = true;
-        toFlash[copyTrack-1] = true;
-      }
-      }
-    }
-  }
+  outs[stripLEDsstep[bar]][stripLEDsgroup[bar]] = prevFlashState;
+  if (currentTime - flashTimer > flashLength) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
 }
 
 void fill() {
-  const bool fillPatterns[4][8] = {
+  const bool fillPatterns[5][8] = {
   {1, 1, 1, 1, 1, 1, 1, 1},
   {1, 0, 1, 0, 1, 0, 1, 0},
   {1, 0, 0, 1, 0, 0, 1, 0},
-  {1, 0, 0, 0, 1, 0, 0, 0}};
+  {1, 0, 0, 0, 1, 0, 0, 0},
+  {1, 0, 0, 0, 0, 0, 0, 0}};
   
   ptrnUpdate();
   ptrnLEDsUpdate();
@@ -1038,11 +1210,13 @@ void fill() {
   updateFillOrder();
 
   prevFillIndex = fillIndex;
-  fillIndex = map(faderValue-1, 0, 1023, 5, -1);
+  // fillIndex = map(faderValue-1, 0, 1023, 5, -1);
+  fillIndex = map(faderValue-1, 0, 1023, 6, -1);
 
   bar = seqStep / stepsPerLED;
 
-  if (fillIndex < 4) {
+  // if (fillIndex < 4) {
+  if (fillIndex < 5) {
   for (int i = 0; i <= 7; i++) {
     fillPattern[i] = fillPatterns[fillIndex][i];
   }
@@ -1165,9 +1339,9 @@ void fill() {
 
 void chain() {
   clearLEDstrip();
-  if (justEnteredChain)
+  if (modeChanged)
   {
-    justEnteredChain = false;
+    // modeChanged = false;
     for (int i = 0; i <= 3; i++)
     {
         chainLength = 1;
@@ -1267,38 +1441,90 @@ filledCount = 0;
 void breakMode() {
   ptrnUpdate();
   ptrnLEDsUpdate();
-  if (breakLEDon) {outs[faderLEDstep][faderLEDgroup] = HIGH;}
-  updateFillOrder();
-  breakLength = breakLengths[map(faderValue, 0, 1023, 5, 0)];
 
-  if (newStep && !(step & 1) && (buttons[buttonTrig1step][buttonTrig1group] || buttons[buttonTrig2step][buttonTrig2group] || buttons[buttonTrig3step][buttonTrig3group] || buttons[buttonTrig4step][buttonTrig4group])) {
-    if (jumpBy < (breakLength-1)){
-      jumpBy = jumpBy + 1;
+  if (modeChanged)
+  {
+    // modeChanged = false;
+    breakFreeze = 0;
+    breakLength = breakLengths[1];
+  }
+
+  if (modeChanged || prevButtons[buttonOptionsstep][buttonOptionsgroup]) {
+    prevFader = faderValue;
+    readFader = false;
+    // modeChanged = false;
+  }
+
+  if ((abs(prevFader - faderValue) > 5) && (readFader == false)) {
+    readFader = true;
+  }
+
+  if (readFader) {
+    breakLength = breakLengths[map(faderValue, 0, 1023, 5, 0)];
+  }
+
+  if (breakFreeze) {
+    outs[breakOutstep][breakOutgroup] = HIGH;
+    breakLEDon = true;  
+    outs[submodeLEDSstep[0]][submodeLEDSgroup[0]] = prevFlashState;
+    if (currentTime - flashTimer > flashLength) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
+
+    for (int i = 0; i <= 3; i++) {
+      fillOrder[i] = 0;
     }
-    else{
-      jumpBy = 0;
-      breakOnNextStep = true;
+
+    for (int i = 0; i <= 3; i++) {
+      if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] > prevButtons[buttonTrigstep[i]][buttonTriggroup[i]]) {
+        breakFreeze = i+1;
+      }
       
-      if (fillOrder[fillOrderStep] && (fillOrderStep < 4)) {  // if the element is not zero
-            fillOrderStep++;
+      fillOrder[0] = breakFreeze;
+
+      // Write the loop to the sequence and quit freeze and break tool
+        if (doubleTappedTrig[i]) {
+          doubleTappedTrig[i] = false;
+          uint8_t freezeBuffer[16]; // Max break length is 16 steps
+          for (int j = 0; j <= breakLength-1; j++) {
+            freezeBuffer[j] = 0b00000000;
+            for (int k = 0; k <= 3; k++) {
+              freezeBuffer[j] |= bool(seqs[((breakFreeze - 1) * (length / (8))) + j][k + 4 * (activePtrn - 1)] & (1 << activeBank)) << k;
+            }
           }
-          else {
-            fillOrderStep = 1;
+
+          uint8_t bufferStep = 0;
+          for (int j = 0; j <= (length/2)-1; j++) {
+            for (int k = 0; k <= 3; k++) {
+              seqs[j][k + 4 * (activePtrn - 1)] &= ~(0b00000001 << activeBank);
+              seqs[j][k + 4 * (activePtrn - 1)] |= (bool(freezeBuffer[bufferStep] & (0b00000001 << k)) << activeBank);
+            }
+            bufferStep++;
+            if (bufferStep >= breakLength) {
+              bufferStep = 0;
+            }
           }
+
+          activeSubmode = 0;
+          breakFreeze = 0b00000000;
+          resetNow();
+          toFlash[3+activePtrn] = true;
+        }
     }
+  }
+  else {
+    updateFillOrder();
 
-    if (fillOrder[fillOrderStep-1]) {jumpTo = (1+(length/8)*(fillOrder[fillOrderStep-1] - 1)) + jumpBy;}
-    if (jumpTo > (length / 2)) {jumpTo = jumpTo - (length / 2);} // return to start of sequence if trying to jump beyond sequence length
-
-    breakLEDon = true;
+    for (int i = 0; i <= 3; i++) {
+      if (doubleTappedTrig[i]) {
+        breakFreeze = i+1;
+        doubleTappedTrig[i] = false;
+        }
+      }
+  }
+  
+  if (breakLEDon || !(buttons[buttonTrig1step][buttonTrig1group] || buttons[buttonTrig2step][buttonTrig2group] || buttons[buttonTrig3step][buttonTrig3group] || buttons[buttonTrig4step][buttonTrig4group])){
     outs[faderLEDstep][faderLEDgroup] = HIGH;
-
   }
-  else if (newStep && !(step & 1)) {
-    jumpTo = 0; jumpBy = 0; fillOrderStep = 1; 
-    breakLEDon = false;
-  }
-
+  
   if (altModes[0][0] && (buttons[buttonTrig1step][buttonTrig1group] || buttons[buttonTrig2step][buttonTrig2group] || buttons[buttonTrig3step][buttonTrig3group] || buttons[buttonTrig4step][buttonTrig4group])) {
         outs[breakOutstep][breakOutgroup] = HIGH;
   }
@@ -1313,6 +1539,7 @@ void shredMode() {
   
   ptrnUpdate();
   ptrnLEDsUpdate();
+  
   if (!altModes[1][0]) {
 
     // Handle LEDs and Fader
@@ -1368,8 +1595,6 @@ void shredMode() {
                 {
                   k = 0;
                 }
-                // Serial.print(F(toShred[0])); I wish this worked but it doesn't
-                // Serial.println(F(toShred[1]));
               }
 
               toFlash[shredTracks[0] - 1] = true;
@@ -1442,6 +1667,52 @@ void shredMode() {
     }
   }
   else {
+
+    clearLEDstrip();
+    outs[faderLEDstep][faderLEDgroup] = true;
+
+  if (modeChanged) {
+    // modeChanged = false;
+
+    flashTimer = currentTime;
+    prevFlashState = HIGH;
+    prevFader = faderValue;
+    readFader = false;
+  }
+
+  if ((abs(prevFader - faderValue) > 5) && (readFader == false)) {
+    readFader = true;
+  }
+
+  uint8_t stepsToShred = 7+4;
+  if (readFader) {
+    stepsToShred = 0;
+    for (int i = 0; i <= 15; i++) {
+      if (faderValue < ((i+1) * (1024 / 16))) {
+        stepsToShred++;
+      }
+    }
+  }
+
+  for (int i = 0; i <= 7; i++)
+  {
+    if (stepsToShred > 8)
+    {
+      if (stepsToShred - 9 >= i)
+      {
+        outs[stripLEDsstep[i]][stripLEDsgroup[i]] = true;
+      }
+    }
+      else
+      {
+        if (stepsToShred <= (8 - i))
+        {
+          outs[stripLEDsstep[7 - i]][stripLEDsgroup[7 - i]] = true;
+        }
+      }
+  }
+
+
   if (bufferSequence){ // Save sequence into buffer on entering Shredmode, or changing patterns
     for (int i = 0; i <= (maxLength / 2 - 1); i++)
     {
@@ -1453,14 +1724,6 @@ void shredMode() {
         }
         bufferSequence = false;
   }
-
-  // if (newStep && (step & 1)) {
-  //   for (int i = 0; i <= 3; i++) {
-  //     bool toPrint = seqBuffer[seqStep] & (1 << i);
-  //     Serial.print(toPrint);
-  //   }
-  //   Serial.println();
-  // }
   
   for (int i = 0; i <= 3 ; i++) { // i-th trigger button pressed
     if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] > prevButtons[buttonTrigstep[i]][buttonTriggroup[i]]) {
@@ -1479,22 +1742,29 @@ void shredMode() {
         }
         }
 
-        for (int j = 0; j <= ((length / 8) - 1); j++)
+        for (int j = 0; j <= 7; j++)
         {
           for (int k = 0; k <= 3; k++)
           {
-            seqs[firstPasteStep + j][4*(activePtrn - 1) + k ] = (seqs[firstPasteStep + j][4*(activePtrn - 1) + k ] & ~(1 << activeBank)) | (((seqBuffer[firstStep + j] & (1 << k)) >> k) << activeBank); // Paste a chunk of the buffered sequence into pattern memory
+            if (stepsToShred <= 8 && j >= stepsToShred) {
+              seqs[firstPasteStep + j][4*(activePtrn - 1) + k ] = (seqs[firstPasteStep + j][4*(activePtrn - 1) + k ] & ~(1 << activeBank));
+            }
+            else {
+              seqs[firstPasteStep + j][4*(activePtrn - 1) + k ] = (seqs[firstPasteStep + j][4*(activePtrn - 1) + k ] & ~(1 << activeBank)) | (((seqBuffer[firstStep + j] & (1 << k)) >> k) << activeBank); // Paste a chunk of the buffered sequence into pattern memory
+            }
           }
 
-          if ((firstPasteStep + j) == (length / 2))
-          { // Stop pasting if end of pattern reached
+          if ((firstPasteStep + j) == (length / 2) || (stepsToShred > 8 && (j == (stepsToShred - 9))))
+          { // Stop pasting if end of pattern reached OR if stepsToShred has been reached (Right side of fader)
             break;
           }
       }
     }
   }
-  stripStepMeter();
-}
+  bar = seqStep / stepsPerLED;
+
+  outs[stripLEDsstep[bar]][stripLEDsgroup[bar]] = prevFlashState;
+  if (currentTime - flashTimer > flashLength) {prevFlashState = !prevFlashState; flashTimer = currentTime;}}
 }
 
 void probabilityMode() {
@@ -1504,10 +1774,10 @@ void probabilityMode() {
   clearLEDstrip();
   outs[faderLEDstep][faderLEDgroup] = HIGH;
 
-    if (justEnteredProbability) {
+    if (modeChanged || prevButtons[buttonOptionsstep][buttonOptionsgroup]) {
       prevFader = faderValue;
       readFader = false;
-      justEnteredProbability = false;
+      // modeChanged = false;
     }
 
     if ((abs(prevFader - faderValue) > 5) && (readFader == false)) {
@@ -1515,15 +1785,10 @@ void probabilityMode() {
     }
 
   if (readFader){
-    // probability = map(faderValue, 0, 1023, probCap, 0);
     probability = 1023 - faderValue;
-    // for (int i = 0; i <= 7; i++) {
-    //   outs[stripLEDsstep[i]][stripLEDsgroup[i]] = (1023 - faderValue > (i * (1023 / 8)));
-    // }
   }
-  // else {
-    for (int i = 0; i <= 7; i++) {
-      if (probability < ((1023/2)-(probDeadzone/2))) {
+    // for (int i = 0; i <= 7; i++) {
+      if (probability < ((1023/2)-(faderDeadzone/2))) {
         for (int j = 0; j <= 3; j++)
         {
           if (probability <= ((j + 1) * (1023 / 8))) {
@@ -1531,7 +1796,7 @@ void probabilityMode() {
           }
         }
       }
-      else if (probability > ((1023/2)+(probDeadzone/2))) {
+      else if (probability > ((1023/2)+(faderDeadzone/2))) {
         for (int j = 4; j <= 7; j++)
         {
           if (probability >= (j * (1023 / 8))) {
@@ -1539,9 +1804,7 @@ void probabilityMode() {
           }
         }
       }
-      // outs[stripLEDsstep[i]][stripLEDsgroup[i]] = (probability > (i * (1023 / 8)));
-    } 
-  // }
+    // } 
 
   bar = seqStep / stepsPerLED;
 
@@ -1552,6 +1815,35 @@ void probabilityMode() {
     if (buttons[buttonTrigstep[i]][buttonTriggroup[i]] > prevButtons[buttonTrigstep[i]][buttonTriggroup[i]]) { probabilityActive[i] = !probabilityActive[i]; }
     outs[trigLEDSstep[i]][trigLEDSgroup[i]] = probabilityActive[i];
   }
+
+  // Handle probability mode switching - double tap to cycle through modes per channel
+  for (int i = 0; i <= 3; i++) {
+    if (doubleTappedTrig[i]) {
+      uint8_t channelState = (microtimingProbability >> 2*i) & 0b11;
+      channelState = ((channelState + 1) & 0b11);
+      if (channelState == 0) {
+        channelState = 1;
+      }
+      microtimingProbability = (microtimingProbability & ~(0b11 << (2 * i)));
+      microtimingProbability = (microtimingProbability |  (channelState << (2 * i)));
+      microtimingProbabilityChanged = 0b11 << (2*i);
+      flashTimer = currentTime;
+      flashStarted = currentTime;
+      prevFlashState = HIGH;
+    }
+  }
+  if (microtimingProbabilityChanged) {
+    clearLEDstrip();
+    if (currentTime - flashTimer > (flashLength/2)) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
+    if ((currentTime - flashStarted) > flashFor) {microtimingProbabilityChanged = 0b00000000;}
+    for (int i = 0; i <= 7; i++) {
+        if (((microtimingProbabilityChanged & (1 << i)) & (microtimingProbability)) && ((currentTime - flashStarted) < flashFor/3)) {
+          outs[stripLEDsstep[i]][stripLEDsgroup[i]] = prevFlashState;
+        }
+        else {
+        outs[stripLEDsstep[i]][stripLEDsgroup[i]] = microtimingProbability & (1 << i) ; }
+    }
+  }
 }
 
 void xFadeMode() {
@@ -1560,8 +1852,8 @@ void xFadeMode() {
   clearPtrnLEDs();
   clearLEDstrip();
 
-  if (justEnteredXFade) {
-    justEnteredXFade = false;
+  if (modeChanged) {
+    // modeChanged = false;
     
     if (altModes[3][0] && (chainLength > 1)) {
       xFadePtrns[0] = activeBank+1;
@@ -1624,7 +1916,6 @@ void xFadeMode() {
 
   if (xFadePtrns[1])
   {
-  outs[ptrnLEDSstep[xFadePtrns[0]]][ptrnLEDSgroup[xFadePtrns[0]]] = HIGH;
       clearPtrnLEDs();
       if (currentTime - flashTimer > flashLength)
       {
@@ -1640,6 +1931,33 @@ void xFadeMode() {
     }
       bar = seqStep / stepsPerLED;
       outs[stripLEDsstep[bar]][stripLEDsgroup[bar]] = prevFlashState;
+  
+      for (int i = 0; i <= 3; i++) {
+        if (doubleTappedTrig[i]) { // When i-th trigger button is double-tapped
+          toFlash[i] = true;
+          toFlash[i+4] = true;
+          // Write a snapshot of the current playback into the i-th pattern
+          for (int j = 0; j <= (length / 2) - 1; j++)
+          {
+              uint8_t patternIndex = xFadePtrns[(xFadeStep) <= (j & 31)]-1;
+              for (int k = 0; k <= 3; k++)
+              {
+                uint8_t note_buffer = seqs[j][4 * patternIndex + k];
+                seqs[j][4 * i + k] &= ~(0b1 << activeBank);
+                seqs[j][4 * i + k] |= (note_buffer & (1 << activeBank));
+              }
+          }
+    
+          // Quit the x-fade mode and activate the i-th pattern
+          activePtrn = i+1;
+          chainLength = 1;
+          patternChain[0] = activePtrn;
+          bankChain[0] = activeBank;
+          activeSubmode = 0;
+         }
+
+      }
+
   }
   else {
     stripStepMeter();
@@ -1649,6 +1967,7 @@ void xFadeMode() {
     }
     outs[ptrnLEDSstep[xFadePtrns[0]-1]][ptrnLEDSgroup[xFadePtrns[0]-1]] = HIGH;
   }
+
 }
 
 
@@ -1696,7 +2015,7 @@ void handleModes() {
 
   // Execute when RECmode changes
   if (buttons[buttonRECstep][buttonRECgroup] != prevButtons[buttonRECstep][buttonRECgroup]) {
-    if (!bootOptions[2]) {
+    if (!(bootOptions & (1 << 2))) {
       activeSubmode = 0;
     }
   }
@@ -1715,6 +2034,8 @@ void handleModes() {
     submodeUpdate();
   };
 
+  refreshStates();
+
   if (buttons[buttonOptionsstep][buttonOptionsgroup]) {
   handleOptions();
   }
@@ -1723,7 +2044,6 @@ void handleModes() {
     stripStepMeter();
     ptrnLEDsUpdate();
   }
-   
   else if (RECmode) {  // REC Mode
     submodeLEDsUpdate();
     trigLights = true;
@@ -1805,28 +2125,30 @@ void handleClockIn() {
   if (extClockPresent) {
     clockInState = extClockState;
       if (clockDiv == 1) { // When clockDiv == 1, step progression between clock ticks has to be estimated
-            if (estimateClock && ((currentTime - prevClockTime) > estimatedTempo)) {
-            // if (((currentTime - prevClockTime) > estimatedTempo)) {
-            // trig(3);
-            progressClock = true;
-            estimateClock = false;
+            if (estimateClock && ((currentTime - prevClockTime) > estimatedTempo[bool(~step & 0b10)]) && (step & 0b00000001)) {
+              progressClock = true;
+              estimateClock = false;
             }
             if (clockInState && !lastClockState && !pause)
             {
+              if (step & 0b00000001) {
+                step++;
+              }
               progressClock = true;
-              estimatedTempo = (currentTime - prevClockTime) / 2;
+              estimatedTempo[bool(step & 0b10)] = (currentTime - prevClockTime) / 2; // two tempos are estimated in sequence to take 2-note swing into account
               prevClockTime = currentTime;
               estimateClock = true;
              }
         }
         else {
           if (clockInState && !lastClockState && !pause) {
-            estimatedTempo = (currentTime - prevClockTime) / 2;
+            estimatedTempo[bool(step & 0b10)] = (currentTime - prevClockTime) / 2;
             prevClockTime = currentTime;
             estimateClock = true;
             if (clockInCounter == 1)
             {
               progressClock = true;
+
             }
 
             if (clockInCounter >= clockDiv/2) {
@@ -1839,7 +2161,20 @@ void handleClockIn() {
         }
     }
   else {
-    if ((currentTime - stepStarted) > tempo) {
+    
+    unsigned long tempoToUse = tempo;
+    signed long swingToUse = tempo/2;
+    swingToUse = (-long(tempo) / 2) + swingAmount * long(tempo) / 1023;
+    if ((swingAmount < ((1023 / 2) - (faderDeadzone / 2))) || (swingAmount > ((1023 / 2) + (faderDeadzone / 2)))) {
+      if ((step & 0b01) != ((step & 0b10) >> 1)) { // pickout steps 1-2, 5-6, 9-10...
+        tempoToUse = tempo + swingToUse;
+      }
+      else {
+        tempoToUse = tempo - swingToUse;
+      }
+    }
+    
+    if ((currentTime - stepStarted) > tempoToUse) {
       progressClock = true;
       stepStarted = micros();
       }
@@ -1907,10 +2242,35 @@ void handleClockOut() {
 void handleDelayedClock() {
 
   if ((currentTime - delayedClockTimer) >= clockDelayTime) {
-    // toFlash[3] = true;
-    // trig(4);
     trigClockOut();
     delayingClock = false;
+  }
+}
+
+void handleDelayedTrigs()
+{
+  for (int i = 0; i <= 3; i++)
+  {
+    if (trigDelayTimer[i] > 0 && trigRepeatsToDo[i] > 0)
+    {
+      if (timePassed >= trigDelayTimer[i])
+      {
+        trig(i + 1);
+
+        trigRepeatsToDo[i]--;
+        if (trigRepeatsToDo[i] > 0)
+        {
+          trigDelayTimer[i] += trigDelays[i]-timePassed;
+        }
+        else {
+          trigDelayTimer[i] = 0;
+        }
+      }
+      else
+      {
+        trigDelayTimer[i] -= timePassed;
+      }
+    }
   }
 }
 
@@ -1934,7 +2294,11 @@ void handleOptions() {
       prevFader = faderValue;
       readFader = false;
 
-      justEnteredProbability = true; // prevencep probability parameter jumping
+      swingFader = false;
+      if ((currentTime - prevOptionsTap) < doubleTap) {
+        swingFader = true; // if FN was double-tapped, fader will set swing instead of tempo
+      }
+      prevOptionsTap = currentTime;
     }
 
     if ((abs(prevFader - faderValue) > 5) && (readFader == false)) {
@@ -1942,7 +2306,12 @@ void handleOptions() {
     }
 
     if (readFader) {
-      tempo = map(faderValue, 0, 1023, maxTempo[extendedTempo], minTempo[extendedTempo]);
+      if (swingFader) {
+        swingAmount = 1023-faderValue;
+      }
+      else {
+        tempo = map(faderValue, 0, 1023, maxTempo[extendedTempo], minTempo[extendedTempo]);
+      }
     }
 
     handleBanks();
@@ -1950,6 +2319,13 @@ void handleOptions() {
 
     if (buttons[buttonResetstep][buttonResetgroup] > prevButtons[buttonResetstep][buttonResetgroup]) {
       pause = !pause;
+      clockInCounter = 1;
+
+    if ((step & 0b00000001) && (step < length)) // don't start on even steps which have no notes
+      {
+        step++;
+      }
+      stepStarted = micros();
     }
     if (pause) {
       outs[stripLED2step][stripLED2group] = true;
@@ -1963,6 +2339,31 @@ void handleOptions() {
       outs[stripLED5step][stripLED5group] = true;
     }
 
+    if (swingFader) {
+      clearLEDstrip();
+
+      if (swingAmount < ((1023/2)-(faderDeadzone/2))) {
+        for (int j = 0; j <= 3; j++)
+        {
+          if (swingAmount <= ((j + 1) * (1023 / 8))) {
+          outs[stripLEDsstep[j]][stripLEDsgroup[j]] = true;
+          }
+        }
+      }
+      else if (swingAmount > ((1023/2)+(faderDeadzone/2))) {
+        for (int j = 4; j <= 7; j++)
+        {
+          if (swingAmount >= (j * (1023 / 8))) {
+            outs[stripLEDsstep[j]][stripLEDsgroup[j]] = true;
+          }
+        }
+      }
+      
+      outs[faderLEDstep][faderLEDgroup] = prevFlashState;
+      if (currentTime - flashTimer > flashLength) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
+    }
+
+
     if (buttons[buttonTrig1step][buttonTrig1group] > prevButtons[buttonTrig1step][buttonTrig1group])
     {
       if (clockDiv == maxClockDiv)
@@ -1973,6 +2374,32 @@ void handleOptions() {
       {
         clockDiv = 2 * clockDiv;
       }
+
+      step = 0;
+      chainStep = 0;
+      activePtrn = patternChain[chainStep];
+      activeBank = bankChain[chainStep];
+      resetOnNextStep = true;
+      flashTimer = currentTime;
+      flashStarted = currentTime;
+      prevFlashState = HIGH;
+      resetNow();
+
+      switch (clockDiv) {
+        case 1:
+          settingToFlash = 0b11111111;
+          break;
+        case 2:
+          settingToFlash = 0b10101010;
+          break;
+        case 4:
+          settingToFlash = 0b10001000;
+          break;
+        case 8:
+          settingToFlash = 0b10000000;
+          break;
+      }
+
       }
 
     if (buttons[buttonTrig2step][buttonTrig2group] > prevButtons[buttonTrig2step][buttonTrig2group]) {
@@ -1988,21 +2415,30 @@ void handleOptions() {
       activePtrn = patternChain[chainStep];
       activeBank = bankChain[chainStep];
       resetOnNextStep = true;
-      lengthChanged = true;
       flashTimer = currentTime;
       flashStarted = currentTime;
       prevFlashState = HIGH;
       resetNow();
+
+      switch (length) {
+        case 32:
+          settingToFlash = 0b11000000;
+          break;
+        case 64:
+          settingToFlash = 0b11110000;
+          break;
+        case 128:
+          settingToFlash = 0b11111111;
+          break;
+      }
     }
 
-    if (lengthChanged) {
+    if (settingToFlash) {
       clearLEDstrip();
       if (currentTime - flashTimer > (flashLength/2)) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
-      if ((currentTime - flashStarted) > flashFor) {lengthChanged = false;}
+      if ((currentTime - flashStarted) > flashFor) {settingToFlash = 0b00000000;}
       for (int i = 0; i <= 7; i++) {
-        if (i < (length/16)) {
-          outs[stripLEDsstep[i]][stripLEDsgroup[i]] = !prevFlashState; 
-        }
+        outs[stripLEDsstep[i]][stripLEDsgroup[i]] = !prevFlashState && (settingToFlash & (1 << (7 - i))); 
       }
     }
 
@@ -2032,19 +2468,26 @@ void handleOptions() {
       save();
       }
     }
+
+    bar = seqStep / stepsPerLED;
+    if (!settingToFlash) {
+      outs[stripLEDsstep[bar]][stripLEDsgroup[bar]] = prevFlashState;
+      if (currentTime - flashTimer > flashLength) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
+    }
   }
 
 void handleBanks() {
     for (int i = 0; i <= 3; i++) {
           if (buttons[buttonPatternStep[i]][buttonPatternGroup[i]] > prevButtons[buttonPatternStep[i]][buttonPatternGroup[i]]) {
-            if (!bootOptions[3]) {
+            if (!(bootOptions & (1 << 3))) {
                 activeBank = i;
+                bufferSequence = true;
               }
             for (int j = 0; j <= 7; j++)  {
               bankChain[j] = i;
             if (altModes[3][0] && (chainLength > 1)) { // treat a special case when xFading banks but user switches bank manually - refresh the xFade mode
               xFadePtrns[0] = activeBank+1;
-              justEnteredXFade = true;
+              modeChanged = true;
               xFadePtrns[1] = 0;
             }
           }
@@ -2132,7 +2575,7 @@ void takeDownOuts() {
       }
 
   // Take down Reset out
-      if (((currentTime - resetStarted) > triggerLength) && ((!altModes[0][0] && !breakOn) || (bootOptions[0]))) {
+      if (((currentTime - resetStarted) > triggerLength) && ((!altModes[0][0] && !breakOn) || (bootOptions & (1 << 0)))) {
         outs[resetOutstep][resetOutgroup] = LOW;
         resetOn = false;
       }
@@ -2142,13 +2585,13 @@ void takeDownOuts() {
         if (!altModes[0][0]) {
         outs[breakOutstep][breakOutgroup] = LOW;
         }
-        else if (!bootOptions[0]) {
+        else if (!(bootOptions & (1 << 0))) {
         outs[resetOutstep][resetOutgroup] = LOW; 
         }
         breakOn = false;
       }
 
-      if (altModes[0][0] && (!buttons[buttonTrig1step][buttonTrig1group] && !buttons[buttonTrig2step][buttonTrig2group] && !buttons[buttonTrig3step][buttonTrig3group] && !buttons[buttonTrig4step][buttonTrig4group])) {
+      if (altModes[0][0] && (modeChanged || ((breakFreeze == 0) && (!buttons[buttonTrig1step][buttonTrig1group] && !buttons[buttonTrig2step][buttonTrig2group] && !buttons[buttonTrig3step][buttonTrig3group] && !buttons[buttonTrig4step][buttonTrig4group])))) {
         outs[breakOutstep][breakOutgroup] = LOW;
       }
 
@@ -2167,7 +2610,7 @@ void takeDownOuts() {
 }
 
 void refreshStates() {
-
+  modeChanged = false;
   if ((prevRECmode != RECmode) || (prevSubmode != activeSubmode)) {
 
   // Refresh copy mode if submode changed
@@ -2179,24 +2622,28 @@ void refreshStates() {
 
   // Refresh chain recording mode if submode changed
   // if (!RECmode || (activeSubmode != 4)) {
-  justEnteredChain = true;
+  // justEnteredChain = true;
   // }
 
   // Refresh Break mode if submode changed
   // if (RECmode || (activeSubmode != 1)) {
-  jumpTo = 0;
-  jumpBy = 0;
+
   // }
 
   // Refresh Probability mode if submode changed
   // if (RECmode || (activeSubmode != 3)) {
-  justEnteredProbability = true;
+  // justEnteredProbability = true;
   // }
 
   // Refresh X-Fade mode if submode changed
   // if (RECmode || (activeSubmode != 4)) {
-  justEnteredXFade = true;
+  // justEnteredXFade = true;
   // }
+
+  jumpTo = 0;
+  jumpBy = 0;
+
+  modeChanged = true;
 
   // Refresh momentary mutes when not in modes that utilize them
   // if (!((!RECmode && (activeSubmode == 0)) || (RECmode && (activeSubmode == 0)) || (altModes[0][1] && RECmode && (activeSubmode == 1)) || (!altModes[2][1] && RECmode && (activeSubmode == 3)) || (!altModes[1][0] && !RECmode && (activeSubmode == 2)))) {
@@ -2218,7 +2665,7 @@ void refreshStates() {
   // Refresh Options when out of the options mode
   if (!buttons[buttonOptionsstep][buttonOptionsgroup]) {
     prevTap = 0;
-    lengthChanged = false;
+    settingToFlash = 0b00000000;
   }
 
   // Refresh Mute Double Tap
@@ -2303,15 +2750,14 @@ void save(){
   EEPROM.write(25, pause);
   EEPROM.write(26, extendedTempo);
 
-  EEPROM.write(27, bootOptions[0]);
-  EEPROM.write(28, bootOptions[1]);
-  EEPROM.write(29, bootOptions[2]);
-  EEPROM.write(30, bootOptions[3]);
+  EEPROM.write(27, bootOptions);
 
   for (int i = 0; i <= 7; i++) { // Memory 31 to 38
     EEPROM.write(31 + i, bankChain[i]);
   }
 
+  EEPROM.write(39, microtimingProbability);
+  EEPROM.put(40, swingAmount);
 
   for (int i = 0; i <= 3; i++) { // i-th track
     for (int j = 0; j <= 63; j++) { // j-th step
@@ -2368,14 +2814,14 @@ void load(){
   pause = EEPROM.read(25);
   extendedTempo = EEPROM.read(26);
 
-  bootOptions[0] = EEPROM.read(27);
-  bootOptions[1] = EEPROM.read(28);
-  bootOptions[2] = EEPROM.read(29);
-  bootOptions[3] = EEPROM.read(30);
+  bootOptions = EEPROM.read(27);
 
   for (int i = 0; i <= 7; i++) { // Memory 31 to 38
     bankChain[i] = EEPROM.read(31 + i);
   }
+
+  microtimingProbability = EEPROM.read(39);
+  swingAmount = EEPROM.get(40, swingAmount);
 
   for (int i = 0; i <= 3; i++)
   {
@@ -2433,8 +2879,12 @@ void bootMenu() {
         outs[stripLEDsstep[3]][stripLEDsgroup[3]] = true;
         outs[stripLEDsstep[4]][stripLEDsgroup[4]] = true;
         outs[stripLEDsstep[5]][stripLEDsgroup[5]] = true;
-        outs[stripLEDsstep[6]][stripLEDsgroup[6]] = true;
-        outs[stripLEDsstep[7]][stripLEDsgroup[7]] = false;
+        outs[stripLEDsstep[6]][stripLEDsgroup[6]] = false;
+        outs[stripLEDsstep[7]][stripLEDsgroup[7]] = true;
+        // History:
+        // V1.1 - 11111101
+        // V1.0 - 11111110
+        
 
         currentTime = micros();
         if (currentTime - flashTimer > flashLength) {prevFlashState = !prevFlashState; flashTimer = currentTime;}
@@ -2442,10 +2892,18 @@ void bootMenu() {
 
         for (int i = 0; i <= 3; i++) {
           if (buttons[buttonSubmodeStep[i]][buttonSubmodeGroup[i]] > prevButtons[buttonSubmodeStep[i]][buttonSubmodeGroup[i]]) {
-            bootOptions[i] = !bootOptions[i];
+            bootOptions ^= (1 << i);  // Toggle bit i
           }
-          outs[submodeLEDSstep[i]][submodeLEDSgroup[i]] = bootOptions[i];
+          outs[submodeLEDSstep[i]][submodeLEDSgroup[i]] = (bootOptions & (1 << i)) != 0;
+
+          if (buttons[buttonPatternStep[i]][buttonPatternGroup[i]] > prevButtons[buttonPatternStep[i]][buttonPatternGroup[i]]) {
+            bootOptions &= 0b11001111;
+            bootOptions |= (uint8_t(i)) << 4;
+          }
+
+          outs[ptrnLEDSstep[i]][ptrnLEDSgroup[i]] = (i == ((bootOptions & 0b00110000) >> 4));
         }
+
 
         // Record previous button state
         for (int i = 0; i <= 8; i++)
